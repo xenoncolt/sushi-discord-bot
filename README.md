@@ -11,7 +11,9 @@ Download the zip and extract it.
 npm install
 ```
 3. Rename the `example.env` file to `.env` and fill in your Discord bot token.
-4. Update the `config/config.json` file with the appropriate IDs for your server, channels.
+
+~~4. Update the `config/config.json` file with the appropriate IDs for your server, channels.~~ [This step is no longer needed as the bot now saves the event data to a database instead of a config file.]
+
 5. Build the js code from the ts source.
 ```
 npm run build
