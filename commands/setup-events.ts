@@ -1,11 +1,10 @@
-import { ApplicationCommandOptionData, ApplicationCommandOptionType, ChannelSelectMenuBuilder, ChannelType, CheckboxBuilder, LabelBuilder, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, TextChannel, TextInputBuilder, TextInputStyle } from "discord.js";
+import { ApplicationCommandOptionData, ApplicationCommandOptionType, ChannelSelectMenuBuilder, ChannelType, CheckboxBuilder, GuildMember, LabelBuilder, MessageFlags, ModalBuilder, PermissionFlagsBits, RoleSelectMenuBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, TextChannel, TextInputBuilder, TextInputStyle } from "discord.js";
 import { Command } from "../types/Command.js";
 import { createTimingTable } from "../schema/timingDB.js";
 import { scheduleEvent } from "../utils/eventScheduler.js";
 import { TimingRow } from "../types/TimingRow.js";
 
 
-let event_time: Date;
 const event_db = await createTimingTable();
 
 export default {
@@ -95,7 +94,7 @@ export default {
         //     min_length: 1,
         // }
     ] satisfies ApplicationCommandOptionData[],
-    async execute(interaction, client) {
+    async execute(interaction) {
         const timezone = interaction.options.getNumber('timezone', true);
         const hour = interaction.options.getInteger('hour', true);
         const minute = interaction.options.getInteger('minute', true);
@@ -105,7 +104,7 @@ export default {
 
         // const event_type = interaction.options.getString('event-type', true);
 
-        event_time = new Date(
+        const event_time = new Date(
             Date.UTC(
                 year,
                 month - 1,
@@ -115,9 +114,9 @@ export default {
             )
         )
         // console.log('Event time in UTC:', event_time.toISOString());
-        
+
             const modal = new ModalBuilder()
-            .setCustomId('setup-events')
+            .setCustomId(`setup-events:${event_time.getTime()}`)
             .setTitle('Event Setup')
             .addLabelComponents(
                 new LabelBuilder()
@@ -192,20 +191,28 @@ export default {
     },
     
     async modalSubmit(interaction, client) {
+        const event_ms = Number(interaction.customId.split(':')[1]);
+        if (!Number.isFinite(event_ms)) {
+            await interaction.reply({ content: `Something went wrong reading the event time. Please run /setup-events again.`, ephemeral: true });
+            return;
+        }
+
         const channel = interaction.fields.getSelectedChannels('setup-events_channel', true, [ChannelType.GuildText, ChannelType.GuildAnnouncement]).first();
         const msg = interaction.fields.getTextInputValue('setup-events_msg');
         const name = interaction.fields.getTextInputValue('setup-events_name');
         const type = interaction.fields.getStringSelectValues('setup-events_type')[0];
         const board_channel = interaction.fields.getSelectedChannels('setup-events_board')?.first();
 
-        // console.log(channel?.id);
-        // console.log(event_time);
+        if (!channel?.permissionsFor(interaction.member as GuildMember).has([PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels])) {
+            await interaction.reply({content: `You are not allowed to use this command on <#${channel?.id}>.`, flags: MessageFlags.Ephemeral});
+            return;
+        }
 
         // TODO: save all to db
         const result = await event_db.run(
             `INSERT INTO timing (event_name, event_time, channel_id, guild_id, msg, type, board_channel_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
             name,
-            event_time.getTime(),
+            event_ms,
             channel?.id,
             interaction.guildId,
             msg,
@@ -216,6 +223,6 @@ export default {
         const new_event = await event_db.get<TimingRow>(`SELECT * FROM timing WHERE id = ?`, result.lastID).catch(console.error);
         if (new_event) scheduleEvent(client, new_event);
 
-        await interaction.reply({ content: `Event "${name}" has been set up successfully for <t:${Math.floor(event_time.getTime() / 1000)}:F>`, ephemeral: true });
+        await interaction.reply({ content: `Event "${name}" has been set up successfully for <t:${Math.floor(event_ms / 1000)}:F>`, ephemeral: true });
     },
 } satisfies Command;

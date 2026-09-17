@@ -1,49 +1,118 @@
-import { Client, ContainerBuilder, MessageFlags, SeparatorBuilder, SeparatorSpacingSize, TextDisplayBuilder } from "discord.js";
-import { createTimingTable } from "../schema/timingDB";
+import { Client, ContainerBuilder, MessageFlags, SendableChannels, SeparatorBuilder, SeparatorSpacingSize, TextDisplayBuilder } from "discord.js";
+import { createTimingTable } from "../schema/timingDB.js";
 import { TimingRow } from "../types/TimingRow.js";
 
 
 const db = await createTimingTable();
 
+// Node's setTimeout stores the delay in a 32-bit signed int; a larger delay
+// overflows and fires (almost) immediately. Cap each hop below that and re-arm
+// for longer waits so monthly / far-future events actually wait.
+const MAX_DELAY = 2_147_483_647;
+
+// miss event time 5 min
+const CATCH_UP_GRACE_MS = 10 * 60 * 1000;
 
 
+const timers = new Map<number, NodeJS.Timeout>();
 
-export function scheduleEvent(client: Client, event: TimingRow) {
+
+export function clearEventTimer(id: number): void {
+    const t = timers.get(id);
+    if (t) {
+        clearTimeout(t);
+        timers.delete(id);
+    }
+}
+
+// Arm a cancellable timer that fires at `fireAt` (epoch ms), chunking the wait
+// into <= MAX_DELAY hops so long delays don't overflow setTimeout.
+function armTimer(id: number, fireAt: number, onFire: () => void): void {
+    clearEventTimer(id);
+
+    const step = () => {
+        const remaining = fireAt - Date.now();
+        if (remaining <= 0) {
+            timers.delete(id);
+            onFire();
+            return;
+        }
+        timers.set(id, setTimeout(step, Math.min(remaining, MAX_DELAY)));
+    };
+
+    step();
+}
+
+
+export function scheduleEvent(client: Client, event: TimingRow): void {
     const delay = event.event_time - Date.now();
 
     if (delay <= 0) {
-        if (event.type === 'once') {
-            db.run(`DELETE FROM timing WHERE id = ?`, event.id).catch(console.error);
-            return;
-        }
-
-        const next_time = advanceToFuture(event.event_time, event.type);
-        db.run(`UPDATE timing SET event_time = ? WHERE id = ?`, next_time, event.id).catch(console.error);
-        scheduleEvent(client, {...event, event_time: next_time});
-        return
+        handleMissed(client, event).catch(console.error);
+        return;
     }
 
     if (event.board_channel_id) {
         updateBoardMsg(client, event).catch(console.error);
     }
 
-    setTimeout(async () => {
-        const re_event = await db.get<TimingRow>(`SELECT * FROM timing WHERE id = ?`, event.id) ?? event;
-        await fireEvent(client, re_event);
-        
+    armTimer(event.id, event.event_time, () => {
+        onFire(client, event.id).catch(console.error);
+    });
+}
+
+
+// Fired by the timer. Re-reads the event fresh (it may have been edited or
+// removed while pending), posts it, then either deletes (once) or advances and
+// reschedules (recurring). Wrapped so a failure can never crash the process or
+// silently kill a recurring schedule.
+async function onFire(client: Client, id: number): Promise<void> {
+    try {
+        const event = await db.get<TimingRow>(`SELECT * FROM timing WHERE id = ?`, id);
+        if (!event) {
+            clearEventTimer(id);
+            return;
+        }
+
+        await fireEvent(client, event);
+
         if (event.type === "once") {
-            await db.run(`DELETE FROM timing WHERE id = ?`, event.id);
-            console.log(`${event.event_name} Onetime event works`)
+            await db.run(`DELETE FROM timing WHERE id = ?`, id);
+            clearEventTimer(id);
         } else {
             const next_time = getNextOccurrence(event.event_time, event.type);
-            
-            await db.run(`UPDATE timing SET event_time = ? WHERE id = ?`, next_time, event.id);
-            
-            const updated = await db.get<TimingRow>(`SELECT * FROM timing WHERE id = ?`, event.id);
-
-            if (updated) scheduleEvent(client, updated);
+            await db.run(`UPDATE timing SET event_time = ? WHERE id = ?`, next_time, id);
+            scheduleEvent(client, { ...event, event_time: next_time });
         }
-    }, delay);
+    } catch (err) {
+        console.error(`Failed to process event ${id}:`, err);
+    }
+}
+
+
+async function handleMissed(client: Client, event: TimingRow): Promise<void> {
+    const overdue_by = Date.now() - event.event_time;
+
+    if (overdue_by <= CATCH_UP_GRACE_MS) {
+        await fireEvent(client, event);
+    } else {
+        console.warn(`Skipping stale occurrence of "${event.event_name}" (overdue ${msToHuman(overdue_by)})`);
+    }
+
+    if (event.type === "once") {
+        await db.run(`DELETE FROM timing WHERE id = ?`, event.id);
+        clearEventTimer(event.id);
+        return;
+    }
+
+    const next_time = advanceToFuture(event.event_time, event.type);
+    if (next_time <= event.event_time) {
+        console.warn(`Cannot advance event "${event.event_name}" of unknown type "${event.type}"`);
+        return;
+    }
+
+    await db.run(`UPDATE timing SET event_time = ? WHERE id = ?`, next_time, event.id);
+    scheduleEvent(client, { ...event, event_time: next_time });
 }
 
 
@@ -53,6 +122,7 @@ export async function startEventScheduler(client: Client): Promise<void> {
         scheduleEvent(client, event);
     }
 }
+
 
 function buildBoardContainer(event_name: string, time_ms: number, type: TimingRow["type"]): ContainerBuilder {
     const unix_sec = Math.floor(time_ms / 1000);
@@ -78,13 +148,21 @@ function buildBoardContainer(event_name: string, time_ms: number, type: TimingRo
     return container;
 }
 
+async function resolveSendable(client: Client, channel_id: string): Promise<SendableChannels | null> {
+    const channel = client.channels.cache.get(channel_id)
+        ?? await client.channels.fetch(channel_id).catch(() => null);
+
+    if (channel && channel.isTextBased() && channel.isSendable()) {
+        return channel;
+    }
+    return null;
+}
 
 
 async function fireEvent(client: Client, event: TimingRow): Promise<void> {
-    const channel = client.channels.cache.get(event.channel_id);
-
-    if (channel?.isTextBased() && channel.isSendable()) {
-        try {
+    try {
+        const channel = await resolveSendable(client, event.channel_id);
+        if (channel) {
             const container = new ContainerBuilder();
             container.addTextDisplayComponents(
                 new TextDisplayBuilder()
@@ -92,26 +170,36 @@ async function fireEvent(client: Client, event: TimingRow): Promise<void> {
             )
 
             await channel.send({ components: [container], flags: MessageFlags.IsComponentsV2 });
-        } catch (err) {
-            console.error(`Failed to send announcement for ${event.event_name}`, err);
+        } else {
+            console.warn(`Announcement channel ${event.channel_id} not available for ${event.event_name}`);
         }
-    } else {
-        console.warn(`Announcement channel ${event.channel_id} not available for ${event.event_name}`);
+    } catch (err) {
+        console.error(`Failed to send announcement for ${event.event_name}`, err);
     }
 
     if (event.board_channel_id) {
-        await updateBoardMsg(client, event);
+        try {
+            await updateBoardMsg(client, event);
+        } catch (err) {
+            console.error(`Failed to update board for ${event.event_name}`, err);
+        }
     }
 }
 
 
+function displayTimeFor(event: TimingRow): number {
+    if (event.type === "once" || event.event_time > Date.now()) {
+        return event.event_time;
+    }
+    return getNextOccurrence(event.event_time, event.type);
+}
+
+
 async function updateBoardMsg(client: Client, event: TimingRow): Promise<void> {
-    const board_channel = client.channels.cache.get(event.board_channel_id!);
-    if (!board_channel?.isTextBased() || !board_channel.isSendable()) return;
+    const board_channel = await resolveSendable(client, event.board_channel_id!);
+    if (!board_channel) return;
 
-    // const display_time = event.type === "once" ? event.event_time : getNextOccurrence(event.event_time, event.type);
-
-    const container = buildBoardContainer(event.event_name, event.event_time, event.type);
+    const container = buildBoardContainer(event.event_name, displayTimeFor(event), event.type);
 
     if (event.board_msg_id) {
         try {
@@ -123,7 +211,7 @@ async function updateBoardMsg(client: Client, event: TimingRow): Promise<void> {
 
             if (old_msg.deletable) await old_msg.delete().catch(() => {});
         } catch {
-
+            
         }
     }
 
@@ -132,25 +220,53 @@ async function updateBoardMsg(client: Client, event: TimingRow): Promise<void> {
 }
 
 
+function isRecurring(type: TimingRow["type"]): boolean {
+    return type === "daily" || type === "weekly" || type === "monthly";
+}
+
 
 function advanceToFuture(event_time_ms: number, type: TimingRow["type"]): number {
+    if (!isRecurring(type)) return event_time_ms;
+
+    const now = Date.now();
     let t = event_time_ms;
-    while (t <= Date.now()) {
-        t = getNextOccurrence(t, type);
+    let guard = 0;
+
+    while (t <= now && guard < 100_000) {
+        const next = getNextOccurrence(t, type);
+        if (next <= t) break; 
+        t = next;
+        guard++;
     }
+
     return t;
 }
 
 
+// Advance one interval using UTC math so results don't drift with the host's
+// local timezone / DST. Monthly clamps day-of-month so e.g. Jan 31 -> Feb 28
+// instead of overflowing into March.
 function getNextOccurrence(event_time_ms: number, type: TimingRow["type"]): number {
     const d = new Date(event_time_ms);
     switch (type) {
-        case "daily":   d.setDate(d.getDate() + 1);      break;
-        case "weekly":  d.setDate(d.getDate() + 7);      break;
-        case "monthly": d.setMonth(d.getMonth() + 1);    break;
+        case "daily":   d.setUTCDate(d.getUTCDate() + 1);  break;
+        case "weekly":  d.setUTCDate(d.getUTCDate() + 7);  break;
+        case "monthly": addUTCMonth(d);                    break;
+        default:        return event_time_ms; 
     }
     return d.getTime();
 }
+
+
+function addUTCMonth(d: Date): void {
+    const day = d.getUTCDate();
+    d.setUTCDate(1); 
+    d.setUTCMonth(d.getUTCMonth() + 1);
+
+    const days_in_target = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+    d.setUTCDate(Math.min(day, days_in_target));
+}
+
 
 function msToHuman(ms: number): string {
     const s = Math.floor(ms / 1000);

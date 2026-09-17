@@ -10,8 +10,7 @@ import { Command } from "./types/Command.js";
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMessages
     ]
 }) as ExtendedClient;
 

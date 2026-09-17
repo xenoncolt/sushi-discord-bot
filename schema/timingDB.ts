@@ -1,15 +1,17 @@
-import { open } from 'sqlite';
+import { open, Database } from 'sqlite';
 import sqlite3 from 'sqlite3';
 
-async function timingDB() {
-    return open({
+let db_promise: Promise<Database> | null = null;
+
+async function openDB(): Promise<Database> {
+    const db = await open({
         filename: './database/timing.db',
         driver: sqlite3.Database
     });
-}
 
-export async function createTimingTable() {
-    const db = await timingDB();
+    await db.exec(`PRAGMA journal_mode = WAL;`);
+    await db.exec(`PRAGMA busy_timeout = 5000;`);
+
     await db.exec(`
         CREATE TABLE IF NOT EXISTS timing (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -21,7 +23,15 @@ export async function createTimingTable() {
             type TEXT,
             board_channel_id TEXT,
             board_msg_id TEXT
-        )    
-    `)
+        )
+    `);
+
     return db;
-} 
+}
+
+export function createTimingTable(): Promise<Database> {
+    if (!db_promise) {
+        db_promise = openDB();
+    }
+    return db_promise;
+}

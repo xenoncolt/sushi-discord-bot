@@ -1,7 +1,7 @@
 import { Client, Events } from "discord.js";
 import { registerSlashCommands } from "../slashCommandHandler.js";
 import { ExtendedClient } from "../../types/ExtendedClient.js";
-import { dailyReminder, guildShowdownMention, guildShowdownReminder, guildPartyReminder, guildWarReminder, breakingArmyReminder, guildBreakingArmyMention, weeklyReminder } from "../../utils/wwm-reminders.js";
+
 import { startEventScheduler } from "../../utils/eventScheduler.js";
 
 export default {
@@ -31,7 +31,7 @@ export default {
             const sts = [
                 { name: `custom`, type: 4, state: `😗 I love myself(sushi)` as const},
                 { name: `custom`, type: 4, state: `🍴 Wanna eat me?` as const},
-                { name: `custom`, type: 4, state: `👌 I(sushi) am perfect` as const},
+                { name: `custom`, type: 4, state: `👌 I am perfect` as const},
             ];
             client.user?.setPresence({
                 activities: [sts[status_index]],
