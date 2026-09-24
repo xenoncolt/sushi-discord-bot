@@ -4,3 +4,4 @@ package-lock.json
 /build
 database/*.db-wal
 database/*.db-shm
+/database

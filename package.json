@@ -1,7 +1,7 @@
 {
-  "name": "sushi-discord-bot",
+  "name": "miss-chief",
   "version": "1.0.0",
-  "description": "A discord bot for sushi guild",
+  "description": "MISS CHIEF, the Little Villains guild bot",
   "homepage": "https://github.com/xenoncolt/sushi-discord-bot#readme",
   "bugs": {
     "url": "https://github.com/xenoncolt/sushi-discord-bot/issues"
@@ -17,6 +17,8 @@
   "scripts": {
     "dev": "tsx watch index.ts",
     "build": "tsc",
+    "build:web": "npm --prefix web install && npm --prefix web run build",
+    "build:all": "npm run build && npm run build:web",
     "start": "node build/index.js"
   },
   "devDependencies": {
@@ -26,9 +28,8 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "discord.js": "^14.26.4",
-    "dotenv": "^17.4.2",
-    "sqlite": "^5.1.1",
-    "sqlite3": "^6.0.1"
+    "@resvg/resvg-wasm": "^2.6.2",
+    "discord.js": "^14.27.0",
+    "dotenv": "^17.4.2"
   }
 }

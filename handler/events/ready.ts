@@ -29,9 +29,9 @@ export default {
         let status_index = 0;
         setInterval(() => {
             const sts = [
-                { name: `custom`, type: 4, state: `😗 I love myself(sushi)` as const},
-                { name: `custom`, type: 4, state: `🍴 Wanna eat me?` as const},
-                { name: `custom`, type: 4, state: `👌 I am perfect` as const},
+                { name: `custom`, type: 4, state: `😈 Plotting something` as const},
+                { name: `custom`, type: 4, state: `🗝️ Up to no good` as const},
+                { name: `custom`, type: 4, state: `🎭 Miss Chief at your service` as const},
             ];
             client.user?.setPresence({
                 activities: [sts[status_index]],

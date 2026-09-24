@@ -3,7 +3,7 @@ import { createTimingTable } from "../schema/timingDB.js";
 import { TimingRow } from "../types/TimingRow.js";
 
 
-const db = await createTimingTable();
+const db = createTimingTable();
 
 // Node's setTimeout stores the delay in a 32-bit signed int; a larger delay
 // overflows and fires (almost) immediately. Cap each hop below that and re-arm
@@ -68,7 +68,7 @@ export function scheduleEvent(client: Client, event: TimingRow): void {
 // silently kill a recurring schedule.
 async function onFire(client: Client, id: number): Promise<void> {
     try {
-        const event = await db.get<TimingRow>(`SELECT * FROM timing WHERE id = ?`, id);
+        const event = db.get<TimingRow>(`SELECT * FROM timing WHERE id = ?`, id);
         if (!event) {
             clearEventTimer(id);
             return;
@@ -77,11 +77,11 @@ async function onFire(client: Client, id: number): Promise<void> {
         await fireEvent(client, event);
 
         if (event.type === "once") {
-            await db.run(`DELETE FROM timing WHERE id = ?`, id);
+            db.run(`DELETE FROM timing WHERE id = ?`, id);
             clearEventTimer(id);
         } else {
             const next_time = getNextOccurrence(event.event_time, event.type);
-            await db.run(`UPDATE timing SET event_time = ? WHERE id = ?`, next_time, id);
+            db.run(`UPDATE timing SET event_time = ? WHERE id = ?`, next_time, id);
             scheduleEvent(client, { ...event, event_time: next_time });
         }
     } catch (err) {
@@ -100,7 +100,7 @@ async function handleMissed(client: Client, event: TimingRow): Promise<void> {
     }
 
     if (event.type === "once") {
-        await db.run(`DELETE FROM timing WHERE id = ?`, event.id);
+        db.run(`DELETE FROM timing WHERE id = ?`, event.id);
         clearEventTimer(event.id);
         return;
     }
@@ -111,13 +111,13 @@ async function handleMissed(client: Client, event: TimingRow): Promise<void> {
         return;
     }
 
-    await db.run(`UPDATE timing SET event_time = ? WHERE id = ?`, next_time, event.id);
+    db.run(`UPDATE timing SET event_time = ? WHERE id = ?`, next_time, event.id);
     scheduleEvent(client, { ...event, event_time: next_time });
 }
 
 
 export async function startEventScheduler(client: Client): Promise<void> {
-    const events = await db.all<TimingRow[]>(`SELECT * FROM timing`);
+    const events = db.all<TimingRow[]>(`SELECT * FROM timing`);
     for (const event of events) {
         scheduleEvent(client, event);
     }
@@ -216,7 +216,7 @@ async function updateBoardMsg(client: Client, event: TimingRow): Promise<void> {
     }
 
     const new_msg = await board_channel.send({ components: [container], flags: MessageFlags.IsComponentsV2 });
-    await db.run(`UPDATE timing SET board_msg_id = ? WHERE id = ?`, new_msg.id, event.id)
+    db.run(`UPDATE timing SET board_msg_id = ? WHERE id = ?`, new_msg.id, event.id)
 }
 
 

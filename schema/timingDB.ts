@@ -1,18 +1,11 @@
-import { open, Database } from 'sqlite';
-import sqlite3 from 'sqlite3';
+import { Db } from './database.js';
 
-let db_promise: Promise<Database> | null = null;
+let db: Db | null = null;
 
-async function openDB(): Promise<Database> {
-    const db = await open({
-        filename: './database/timing.db',
-        driver: sqlite3.Database
-    });
+function openDB(): Db {
+    const database = new Db('./database/timing.db');
 
-    await db.exec(`PRAGMA journal_mode = WAL;`);
-    await db.exec(`PRAGMA busy_timeout = 5000;`);
-
-    await db.exec(`
+    database.exec(`
         CREATE TABLE IF NOT EXISTS timing (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event_name TEXT NOT NULL,
@@ -26,12 +19,12 @@ async function openDB(): Promise<Database> {
         )
     `);
 
-    return db;
+    return database;
 }
 
-export function createTimingTable(): Promise<Database> {
-    if (!db_promise) {
-        db_promise = openDB();
+export function createTimingTable(): Db {
+    if (!db) {
+        db = openDB();
     }
-    return db_promise;
+    return db;
 }

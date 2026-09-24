@@ -1,9 +1,25 @@
 import { Events, Interaction, MessageFlags } from "discord.js";
 import { ExtendedClient } from "../../types/ExtendedClient.js";
+import { Command } from "../../types/Command.js";
 import {  } from "fs";
 import config from "../../config/config.json" with { type: "json" };
+import { handleBuilderButton, handleBuilderSelect, isBuilderComponent } from "../../messages/interact.js";
 
 const cooldowns: Map<string, Map<string, number>> = new Map();
+
+// Leveling, shop and game components are addressed as "<command>:<...>", so
+// they reach their command without a hand-written branch for each one.
+function prefixed(client: ExtendedClient, custom_id: string): Command | undefined {
+    const at = custom_id.indexOf(':');
+    return at > 0 ? client.commands.get(custom_id.slice(0, at)) : undefined;
+}
+
+async function replyError(interaction: Interaction, content: string): Promise<void> {
+    if (!interaction.isRepliable()) return;
+    const payload = { content, flags: MessageFlags.Ephemeral as const };
+    if (interaction.replied || interaction.deferred) await interaction.followUp(payload).catch(() => {});
+    else await interaction.reply(payload).catch(() => {});
+}
 
 export default {
     name: Events.InteractionCreate,
@@ -42,9 +58,31 @@ export default {
                 await cmd.execute(interaction, client);
             } catch (err) {
                 console.error(`Error executing command ${interaction.commandName}:`, err);
-                await interaction.reply({ content: 'There was an error while executing this command!', flags: MessageFlags.Ephemeral });
+                await replyError(interaction, 'There was an error while executing this command!');
             }
         } else if (interaction.isStringSelectMenu()) {
+            // Dropdowns inside a message built on the dashboard.
+            if (isBuilderComponent(interaction.customId)) {
+                try {
+                    await handleBuilderSelect(interaction);
+                } catch (err) {
+                    console.error("Error handling a built-message menu:", err);
+                    await replyError(interaction, 'There was an error updating your roles!');
+                }
+                return;
+            }
+
+            const routed = prefixed(client, interaction.customId);
+            if (routed?.selectMenuHandler) {
+                try {
+                    await routed.selectMenuHandler(interaction, client);
+                } catch (err) {
+                    console.error(`Error executing ${routed.name} selectMenuHandler:`, err);
+                    await replyError(interaction, 'There was an error processing your selection!');
+                }
+                return;
+            }
+
             // Handle guild-war select menu
             if (interaction.customId.startsWith("gw_martial_")) {
                 const cmd = client.commands.get("guild-war");
@@ -68,6 +106,28 @@ export default {
             }
         } else if (interaction.isButton()) {
             const buttonId = interaction.customId;
+
+            // Buttons inside a message built on the dashboard.
+            if (isBuilderComponent(buttonId)) {
+                try {
+                    await handleBuilderButton(interaction);
+                } catch (err) {
+                    console.error("Error handling a built-message button:", err);
+                    await replyError(interaction, 'There was an error processing your request!');
+                }
+                return;
+            }
+
+            const routed = prefixed(client, buttonId);
+            if (routed?.buttonHandler) {
+                try {
+                    await routed.buttonHandler(interaction, client);
+                } catch (err) {
+                    console.error(`Error executing ${routed.name} buttonHandler:`, err);
+                    await replyError(interaction, 'There was an error processing your request!');
+                }
+                return;
+            }
 
             // Handle guild-war buttons
             if (buttonId.startsWith("gw_ping_missing_") || buttonId.startsWith("gw_leave_") || buttonId.startsWith("gw_export_sheet_")) {
@@ -95,6 +155,21 @@ export default {
                 }
             }
 
+            // Handle guild application buttons (panel, form steps and review)
+            if (buttonId.startsWith("app_")) {
+                const cmd = client.commands.get("setup-application");
+                if (cmd && cmd.buttonHandler) {
+                    try {
+                        await cmd.buttonHandler(interaction, client);
+                    } catch (err) {
+                        console.error(`Error executing application buttonHandler:`, err);
+                        if (!interaction.replied && !interaction.deferred) {
+                            await interaction.reply({ content: 'There was an error processing your request!', flags: MessageFlags.Ephemeral });
+                        }
+                    }
+                }
+            }
+
             // Handle music player buttons
             if (buttonId.startsWith("music_")) {
                 const cmd = client.commands.get("play");
@@ -110,6 +185,34 @@ export default {
                 }
             }
         } else if (interaction.isModalSubmit()) {
+            const routed = prefixed(client, interaction.customId);
+            if (routed?.modalSubmit) {
+                try {
+                    await routed.modalSubmit(interaction, client);
+                } catch (err) {
+                    console.error(`Error executing modal ${interaction.customId}:`, err);
+                    await replyError(interaction, 'There was an error while processing this modal!');
+                }
+                return;
+            }
+
+            // The application form steps carry their own ids, so they cannot be
+            // matched against a command name the way the modals below are.
+            if (interaction.customId.startsWith("app_")) {
+                const cmd = client.commands.get("setup-application");
+                if (cmd && cmd.modalSubmit) {
+                    try {
+                        await cmd.modalSubmit(interaction, client);
+                    } catch (err) {
+                        console.error(`Error executing application modal ${interaction.customId}:`, err);
+                        if (!interaction.replied && !interaction.deferred) {
+                            await interaction.reply({ content: 'There was an error while saving your application!', flags: MessageFlags.Ephemeral });
+                        }
+                    }
+                }
+                return;
+            }
+
             const modal_cmds = Array.from(client.commands.values()).find(cmd =>
                 interaction.customId.startsWith(cmd.name) && cmd.modalSubmit
             );

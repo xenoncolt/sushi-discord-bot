@@ -5,7 +5,7 @@ import { scheduleEvent } from "../utils/eventScheduler.js";
 import { TimingRow } from "../types/TimingRow.js";
 
 
-const event_db = await createTimingTable();
+const event_db = createTimingTable();
 
 export default {
     name: 'setup-events',
@@ -209,7 +209,7 @@ export default {
         }
 
         // TODO: save all to db
-        const result = await event_db.run(
+        const result = event_db.run(
             `INSERT INTO timing (event_name, event_time, channel_id, guild_id, msg, type, board_channel_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
             name,
             event_ms,
@@ -220,7 +220,7 @@ export default {
             !board_channel ? null : board_channel.id
         );
 
-        const new_event = await event_db.get<TimingRow>(`SELECT * FROM timing WHERE id = ?`, result.lastID).catch(console.error);
+        const new_event = event_db.get<TimingRow>(`SELECT * FROM timing WHERE id = ?`, result.lastID);
         if (new_event) scheduleEvent(client, new_event);
 
         await interaction.reply({ content: `Event "${name}" has been set up successfully for <t:${Math.floor(event_ms / 1000)}:F>`, ephemeral: true });

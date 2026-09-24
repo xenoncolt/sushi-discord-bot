@@ -5,7 +5,7 @@ import { TimingRow } from "../types/TimingRow.js";
 import { clearEventTimer } from "../utils/eventScheduler.js";
 
 
-const db = await createTimingTable(); 
+const db = createTimingTable(); 
 
 
 export default {
@@ -23,7 +23,7 @@ export default {
     async execute(interaction, client) {
         const event_id = interaction.options.getNumber('event', true); 
 
-        const event = await db.get<TimingRow>(`SELECT * FROM timing WHERE id = ? AND guild_id = ?`, event_id, interaction.guildId);
+        const event = db.get<TimingRow>(`SELECT * FROM timing WHERE id = ? AND guild_id = ?`, event_id, interaction.guildId);
 
         if (!event) {
             await interaction.reply({ content: `Event not found`, flags: MessageFlags.Ephemeral });
@@ -53,7 +53,7 @@ export default {
             return;
         }
 
-        await db.run(`DELETE FROM timing WHERE id = ?`, event.id);
+        db.run(`DELETE FROM timing WHERE id = ?`, event.id);
         clearEventTimer(event.id);
 
         await interaction.reply({ content: `Event **${event.event_name}** has been remove successfully`, flags: MessageFlags.Ephemeral });
@@ -61,7 +61,7 @@ export default {
     async autocomplete(interaction) {
         const focused = interaction.options.getFocused().toLowerCase();
 
-        const events = await db.all<TimingRow[]>(`SELECT * FROM timing WHERE guild_id = ?`, interaction.guildId);
+        const events = db.all<TimingRow[]>(`SELECT * FROM timing WHERE guild_id = ?`, interaction.guildId);
 
         const choices = events.filter(e => e.event_name.toLowerCase().includes(focused)).slice(0, 25).map(e => ({
             name: e.event_name,
